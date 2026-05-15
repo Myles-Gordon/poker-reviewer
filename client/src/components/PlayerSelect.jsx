@@ -2,8 +2,8 @@ import React, { useState } from "react";
 import { Users, ChevronDown, ArrowRight, RotateCcw } from "lucide-react";
 
 export default function PlayerSelect({ uploadResult, onAnalyze, onReset }) {
-  const { players, handCount, bigBlind, filename } = uploadResult;
-  const [selected, setSelected] = useState("");
+  const { players, handCount, bigBlind, filename, suggestedHero } = uploadResult;
+  const [selected, setSelected] = useState(suggestedHero || "");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -56,7 +56,9 @@ export default function PlayerSelect({ uploadResult, onAnalyze, onReset }) {
             >
               <option value="">— choose a player —</option>
               {players.map((p) => (
-                <option key={p} value={p}>{p}</option>
+                <option key={p} value={p}>
+                  {p}{p === suggestedHero ? " (detected)" : ""}
+                </option>
               ))}
             </select>
             <ChevronDown size={14} style={styles.chevron} />

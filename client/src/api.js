@@ -20,6 +20,14 @@ export async function analyzeSession(sessionId, heroName) {
   return data;
 }
 
+export async function fetchHands(sessionId, heroName) {
+  const url = `${BASE}/session/${sessionId}/hands?hero=${encodeURIComponent(heroName)}`;
+  const res = await fetch(url);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Failed to fetch hands");
+  return data;
+}
+
 export async function checkHealth() {
   const res = await fetch(`${BASE}/health`);
   return res.json();

@@ -6,7 +6,7 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 
-const { parsePokerNowLog, extractPlayers, filterHandsForHero } = require("./parser");
+const { parsePokerNowLog, extractPlayers, filterHandsForHero, detectHero } = require("./parser");
 const { analyzeSession } = require("./analyzer");
 
 const app = express();
@@ -52,6 +52,7 @@ app.post("/api/upload", upload.single("logFile"), (req, res) => {
     }
 
     const players = extractPlayers(hands);
+    const suggestedHero = detectHero(hands);
 
     // Detect likely big blind from first hand
     const bigBlind = hands[0]?.blinds?.big || 1;
@@ -67,6 +68,7 @@ app.post("/api/upload", upload.single("logFile"), (req, res) => {
       handCount: hands.length,
       bigBlind,
       filename: req.file.originalname,
+      suggestedHero,
     });
   } catch (err) {
     console.error("Upload error:", err);
@@ -120,6 +122,23 @@ app.post("/api/analyze", async (req, res) => {
     console.error("Analyze error:", err);
     res.status(500).json({ error: err.message });
   }
+});
+
+/**
+ * GET /api/session/:sessionId/hands?hero=Name
+ * Returns all hands for the session, filtered to hero if provided.
+ */
+app.get("/api/session/:sessionId/hands", (req, res) => {
+  const { sessionId } = req.params;
+  const { hero } = req.query;
+
+  const session = parsedSessions.get(sessionId);
+  if (!session) {
+    return res.status(404).json({ error: "Session not found. Please re-upload your log file." });
+  }
+
+  const hands = hero ? filterHandsForHero(session.hands, hero) : session.hands;
+  res.json({ hands, count: hands.length });
 });
 
 /**

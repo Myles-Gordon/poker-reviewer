@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { RotateCcw, ChevronDown, ChevronUp, Star, AlertTriangle, Lightbulb } from "lucide-react";
 import MistakeCard from "./MistakeCard.jsx";
 import SizingBreakdown from "./SizingBreakdown.jsx";
+import HandsTab from "./HandsTab.jsx";
 
 const GRADE_COLORS = {
   "A+": "#45a876", A: "#45a876", "A-": "#5cb88a",
@@ -39,12 +40,15 @@ function ScoreRing({ score, grade }) {
   );
 }
 
-export default function Dashboard({ analysisResult, onReset }) {
+export default function Dashboard({ analysisResult, sessionId, onReset }) {
   const { heroName, handCount, bigBlind, review } = analysisResult;
   const { sessionScore, grade, headline, summary, mistakes, positives, leaks, coachingTip, stats, sizingIssuesCount } = review;
 
+  const [activeTab, setActiveTab] = useState("review");
   const [showPositives, setShowPositives] = useState(false);
   const [showLeaks, setShowLeaks] = useState(true);
+
+  const flaggedCount = (mistakes || []).filter(m => m.handNumber != null).length;
 
   const blunders = mistakes.filter((m) => m.type === "blunder");
   const inaccuracies = mistakes.filter((m) => m.type === "inaccuracy");
@@ -65,6 +69,34 @@ export default function Dashboard({ analysisResult, onReset }) {
             New Session
           </button>
         </div>
+
+        {/* Tab bar */}
+        <div style={styles.tabBar}>
+          {[
+            { id: "review", label: "Session Review" },
+            { id: "hands",  label: `Hands${flaggedCount > 0 ? ` (${flaggedCount} flagged)` : ""}` },
+          ].map(tab => (
+            <button
+              key={tab.id}
+              style={{
+                ...styles.tabBtn,
+                color:       activeTab === tab.id ? "var(--text)"  : "var(--text3)",
+                borderBottom: activeTab === tab.id ? "2px solid var(--gold)" : "2px solid transparent",
+              }}
+              onClick={() => setActiveTab(tab.id)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Hands tab */}
+        {activeTab === "hands" && (
+          <HandsTab sessionId={sessionId} heroName={heroName} review={review} />
+        )}
+
+        {/* Review tab content below — hidden when hands tab is active */}
+        {activeTab === "review" && <>
 
         {/* Hero section */}
         <div style={styles.hero} className="fade-in">
@@ -169,6 +201,8 @@ export default function Dashboard({ analysisResult, onReset }) {
           </div>
         )}
 
+        </>}
+
       </div>
     </div>
   );
@@ -188,6 +222,22 @@ const styles = {
     flexDirection: "column",
     gap: "20px",
     paddingBottom: "60px",
+  },
+  tabBar: {
+    display: "flex",
+    gap: "0",
+    borderBottom: "1px solid var(--border)",
+  },
+  tabBtn: {
+    background: "none",
+    border: "none",
+    borderBottom: "2px solid transparent",
+    cursor: "pointer",
+    padding: "10px 18px",
+    fontSize: "13px",
+    fontFamily: "var(--font-body)",
+    marginBottom: "-1px",
+    transition: "color 0.15s",
   },
   topBar: {
     display: "flex",

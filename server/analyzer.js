@@ -4,6 +4,7 @@
  */
 
 const Anthropic = require("@anthropic-ai/sdk");
+const { classifyHeroActions } = require("./actionClassifier");
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -184,6 +185,7 @@ Please respond ONLY with a valid JSON object (no markdown, no explanation outsid
       "handNumber": <int>,
       "type": <"blunder"|"inaccuracy"|"missed_opportunity">,
       "category": <"sizing"|"call"|"fold"|"aggression"|"passivity"|"bluff"|"value">,
+      "street": <"preflop"|"flop"|"turn"|"river">,
       "title": <short title, max 6 words>,
       "explanation": <2-3 sentence explanation of why this was a mistake and what the better play would be>,
       "severity": <1-3, where 3 is most severe>
@@ -205,7 +207,9 @@ Please respond ONLY with a valid JSON object (no markdown, no explanation outsid
   "coachingTip": <one actionable tip to focus on for next session, 1-2 sentences>
 }
 
-Focus on patterns across hands, not just individual spots. Be honest but constructive. The mistakes array should have 3-8 entries max — focus on the most impactful ones.`;
+Focus on patterns across hands, not just individual spots. Be honest but constructive.
+
+IMPORTANT — per-street mistakes: When a mistake spans multiple streets (e.g. a preflop call that becomes untenable on the flop), create SEPARATE entries for each decision point — one with "street":"preflop" for the call, and another with "street":"flop" for the fold. Each entry must have a concise, street-specific explanation focused only on that decision. Do NOT bundle a multi-street story into a single entry. Total entries across all hands should be 3–10.`;
 }
 
 // ── Main analyze function ─────────────────────────────────────────────────────
@@ -213,14 +217,20 @@ Focus on patterns across hands, not just individual spots. Be honest but constru
 async function analyzeSession(heroHands, heroName, bigBlind = 1) {
   const stats = buildSessionStats(heroHands, heroName);
   const sizingIssues = detectSizingIssues(heroHands, heroName, bigBlind);
-
   const prompt = buildPrompt(heroName, heroHands, stats, sizingIssues, bigBlind);
 
-  const message = await client.messages.create({
-    model: "claude-opus-4-5",
-    max_tokens: 4096,
-    messages: [{ role: "user", content: prompt }],
-  });
+  // Run session review and per-action classification in parallel
+  const [message, actionNotes] = await Promise.all([
+    client.messages.create({
+      model: "claude-opus-4-5",
+      max_tokens: 4096,
+      messages: [{ role: "user", content: prompt }],
+    }),
+    classifyHeroActions(heroHands, heroName, bigBlind).catch((err) => {
+      console.warn("Action classification failed (non-fatal):", err.message);
+      return {};
+    }),
+  ]);
 
   const rawText = message.content[0].text.trim();
 
@@ -243,6 +253,7 @@ async function analyzeSession(heroHands, heroName, bigBlind = 1) {
       handNumber: i.handNumber,
       type: "inaccuracy",
       category: "sizing",
+      street: i.action?.street ?? "preflop",
       title: i.type.replace(/_/g, " "),
       explanation: i.description,
       severity: 1,
@@ -251,6 +262,7 @@ async function analyzeSession(heroHands, heroName, bigBlind = 1) {
   review.mistakes = [...review.mistakes, ...additionalSizingMistakes];
   review.stats = stats;
   review.sizingIssuesCount = sizingIssues.length;
+  review.actionNotes = actionNotes;
 
   return review;
 }
