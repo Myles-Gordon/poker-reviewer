@@ -226,7 +226,7 @@ const styles = {
     position: "absolute",
     top: 0,
     height: "100%",
-    background: "rgba(69,168,118,0.15)",
+    background: "rgba(69,168,118,0.2)",
   },
   barFill: {
     position: "absolute",

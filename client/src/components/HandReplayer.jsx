@@ -27,11 +27,13 @@ const ACTION_QUALITY = {
 
 const FORCED_ACTIONS = new Set(["small_blind", "big_blind"]);
 
-// Table geometry — all percentages of the container
-const TX = 50;   // center x
-const TY = 46;   // center y (slightly above midpoint to leave room at bottom)
-const RX = 36;   // oval half-width
-const RY = 25;   // oval half-height
+// Table geometry — all percentages of the container.
+// TY=50 (true centre) and RY=22 (tighter vertical radius) keeps seats clear of the
+// container edges when the table grows via flex rather than the padding-bottom trick.
+const TX = 50;
+const TY = 50;
+const RX = 36;
+const RY = 22;
 
 // ── Seat position helpers ─────────────────────────────────────────────────────
 
@@ -267,7 +269,7 @@ function Seat({ player, seatIndex, n, isHero, step, hand, mistakes }) {
           background: "#c9a84c", color: "#0a0a0f",
           fontFamily: "var(--font-mono)", fontWeight: 700, fontSize: "12px",
           borderRadius: "10px", padding: "2px 8px",
-          zIndex: 3, whiteSpace: "nowrap",
+          zIndex: 6, whiteSpace: "nowrap",
           boxShadow: "0 1px 4px rgba(0,0,0,0.5)",
         }}>
           {chipAmt}
@@ -517,12 +519,9 @@ export default function HandReplayer({ hand, hero, flagged, actionNotes }) {
       </div>
 
       {/* ── Mistake coaching panel ──
-           Show when:  the action is flagged AND (no per-action note, or the note also flags a problem)
-           Always show at the result/showdown step as a recap.
-           Suppress when the per-action note already says "good/best/brilliant" — the two panels
-           would conflict when they refer to different actions on the same street.        ── */}
-      {!!mm && !!displayMistake && (isMistake || step.type === "result") &&
-       (step.type === "result" || !actionNote || ["inaccuracy","mistake","blunder"].includes(actionNote.quality)) && (
+           Only shown at the result/showdown step so mid-hand advice never references
+           future streets. The badge in the narrative row signals the issue in real-time. ── */}
+      {!!mm && !!displayMistake && step.type === "result" && (
         <div style={{ ...styles.mistakePanel, borderColor: mm.color, background: mm.bg }}>
           <div style={styles.mistakePanelHead}>
             <AlertTriangle size={13} color={mm.color} />
@@ -555,7 +554,6 @@ export default function HandReplayer({ hand, hero, flagged, actionNotes }) {
           Next →
         </button>
       </div>
-      <p style={styles.keyHint}>← → arrow keys</p>
     </div>
   );
 }
@@ -563,16 +561,19 @@ export default function HandReplayer({ hand, hero, flagged, actionNotes }) {
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 const styles = {
+  // wrapper fills whatever flex space the parent gives it; tableWrap then grows
+  // inside wrapper. This replaces the old padding-bottom aspect-ratio trick so the
+  // table height is determined by the layout rather than its width.
   wrapper: {
     display: "flex", flexDirection: "column", gap: "10px",
-    marginTop: "2px",
+    flex: 1, minHeight: 0,
   },
 
-  // Table uses padding-bottom trick for a responsive fixed-aspect container
   tableWrap: {
     position: "relative",
+    flex: 1,
+    minHeight: 0,
     width: "100%",
-    paddingBottom: "72%",   // height = 72% of width — tall enough to fit larger seats
     background: "var(--bg3)",
     borderRadius: "var(--radius2)",
     overflow: "hidden",
@@ -680,9 +681,5 @@ const styles = {
   progressFill: {
     height: "100%", background: "var(--gold)",
     borderRadius: "2px", transition: "width 0.2s ease",
-  },
-  keyHint: {
-    fontFamily: "var(--font-mono)", fontSize: "11px",
-    color: "var(--text3)", textAlign: "center",
   },
 };

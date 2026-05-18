@@ -230,7 +230,7 @@ const styles = {
     justifyContent: "center",
     gap: "8px",
     background: "var(--gold)",
-    color: "#0a0a0f",
+    color: "#07100a",
     border: "none",
     borderRadius: "var(--radius)",
     padding: "12px 20px",

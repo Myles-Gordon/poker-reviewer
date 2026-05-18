@@ -209,7 +209,14 @@ Please respond ONLY with a valid JSON object (no markdown, no explanation outsid
 
 Focus on patterns across hands, not just individual spots. Be honest but constructive.
 
-IMPORTANT — per-street mistakes: When a mistake spans multiple streets (e.g. a preflop call that becomes untenable on the flop), create SEPARATE entries for each decision point — one with "street":"preflop" for the call, and another with "street":"flop" for the fold. Each entry must have a concise, street-specific explanation focused only on that decision. Do NOT bundle a multi-street story into a single entry. Total entries across all hands should be 3–10.`;
+IMPORTANT — coverage: Aim to flag 15–30 hands. Flag EVERY hand where the hero:
+  - Made a clear mistake or blunder
+  - Had a missed opportunity (a better line existed)
+  - Made a notably good or excellent play (use "missed_opportunity" type with a positive tone, or add to positives[])
+
+Do NOT only flag the worst hands. A session of 60 hands should yield at least 15–25 flagged entries. If you can only find 7, you are being too conservative — look harder at preflop decisions, bet sizing, and missed value bets.
+
+IMPORTANT — per-street mistakes: When a mistake spans multiple streets (e.g. a preflop call that becomes untenable on the flop), create SEPARATE entries for each decision point — one with "street":"preflop" for the call, and another with "street":"flop" for the fold. Each entry must have a concise, street-specific explanation focused only on that decision. Do NOT bundle a multi-street story into a single entry.`;
 }
 
 // ── Main analyze function ─────────────────────────────────────────────────────
@@ -223,7 +230,7 @@ async function analyzeSession(heroHands, heroName, bigBlind = 1) {
   const [message, actionNotes] = await Promise.all([
     client.messages.create({
       model: "claude-opus-4-5",
-      max_tokens: 4096,
+      max_tokens: 6144,
       messages: [{ role: "user", content: prompt }],
     }),
     classifyHeroActions(heroHands, heroName, bigBlind).catch((err) => {

@@ -5,9 +5,52 @@ const cors = require("cors");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
+const Anthropic = require("@anthropic-ai/sdk");
 
 const { parsePokerNowLog, extractPlayers, filterHandsForHero, detectHero } = require("./parser");
 const { analyzeSession } = require("./analyzer");
+
+// ── Hand context builder (for chat endpoint) ──────────────────────────────────
+
+function buildHandContext(hand, heroName, bigBlind) {
+  const STREETS = ["preflop", "flop", "turn", "river"];
+  const boardAt = {
+    flop:  (hand.board ?? []).slice(0, 3),
+    turn:  (hand.board ?? []).slice(0, 4),
+    river: (hand.board ?? []).slice(0, 5),
+  };
+
+  const actionLines = STREETS.map(street => {
+    const actions = hand.streets?.[street] ?? [];
+    if (actions.length === 0) return null;
+
+    const boardStr = street !== "preflop" && boardAt[street]?.length
+      ? ` [${boardAt[street].join(" ")}]`
+      : "";
+
+    const actStr = actions.map(a => {
+      const who = a.player === heroName ? "Hero" : a.player.split(/[\s@]/)[0].slice(0, 10);
+      let s = `${who} ${a.action}`;
+      if (a.amount) s += ` ${a.amount}`;
+      if (a.sizingRatio != null && a.sizingRatio > 0 && street !== "preflop") {
+        s += ` (${Math.round(a.sizingRatio * 100)}% pot)`;
+      }
+      return s;
+    }).join(", ");
+
+    return `  ${street.charAt(0).toUpperCase() + street.slice(1)}${boardStr}: ${actStr}`;
+  }).filter(Boolean);
+
+  return [
+    `Hand #${hand.handNumber} | ${hand.players?.length ?? "?"} players | Pot: ${hand.potSize} | BB: ${bigBlind}`,
+    `Hero cards: ${hand.yourHand?.length ? hand.yourHand.join(" ") : "unknown"}`,
+    `Hero stack: ${hand.heroStack ?? "unknown"}`,
+    "",
+    actionLines.join("\n"),
+    "",
+    `Result: ${hand.heroWon ? `Hero won ${hand.heroWinAmount}` : "Hero lost"}`,
+  ].join("\n");
+}
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -139,6 +182,80 @@ app.get("/api/session/:sessionId/hands", (req, res) => {
 
   const hands = hero ? filterHandsForHero(session.hands, hero) : session.hands;
   res.json({ hands, count: hands.length });
+});
+
+/**
+ * POST /api/chat
+ * Body: { sessionId, heroName, handNumber, messages }
+ * Streams a Claude coaching response about a specific hand via SSE.
+ */
+app.post("/api/chat", async (req, res) => {
+  try {
+    const { sessionId, heroName, handNumber, messages } = req.body;
+
+    if (!sessionId || !heroName || handNumber == null || !Array.isArray(messages)) {
+      return res.status(400).json({ error: "sessionId, heroName, handNumber, and messages are required" });
+    }
+
+    const session = parsedSessions.get(sessionId);
+    if (!session) {
+      return res.status(404).json({ error: "Session not found. Please re-upload your log file." });
+    }
+
+    if (!process.env.ANTHROPIC_API_KEY) {
+      return res.status(500).json({ error: "ANTHROPIC_API_KEY is not configured." });
+    }
+
+    const heroHands = filterHandsForHero(session.hands, heroName);
+    const hand = heroHands.find(h => h.handNumber === handNumber);
+    if (!hand) {
+      return res.status(404).json({ error: `Hand #${handNumber} not found.` });
+    }
+
+    const handContext = buildHandContext(hand, heroName, session.bigBlind);
+
+    // SSE headers
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.flushHeaders();
+
+    let closed = false;
+    req.on("close", () => { closed = true; });
+
+    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+    const stream = anthropic.messages.stream({
+      model: "claude-opus-4-5",
+      max_tokens: 1024,
+      system: `You are an expert poker coach reviewing a player's session hand by hand. The player is "${heroName}" with a big blind of ${session.bigBlind}. Be concise (2–4 sentences unless more detail is requested), specific to the actual hand data shown, and educational. Reference bet sizes, board texture, and position when relevant. Engage directly with the player's reasoning — explain whether it was correct and exactly why.`,
+      messages: [
+        { role: "user",      content: `Hand context:\n${handContext}` },
+        { role: "assistant", content: "I've reviewed the hand. What would you like to discuss?" },
+        ...messages,
+      ],
+    });
+
+    for await (const chunk of stream) {
+      if (closed) break;
+      if (chunk.type === "content_block_delta" && chunk.delta.type === "text_delta") {
+        res.write(`data: ${JSON.stringify({ text: chunk.delta.text })}\n\n`);
+      }
+    }
+
+    if (!closed) {
+      res.write("data: [DONE]\n\n");
+      res.end();
+    }
+  } catch (err) {
+    console.error("Chat error:", err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: err.message });
+    } else {
+      res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
+      res.end();
+    }
+  }
 });
 
 /**
