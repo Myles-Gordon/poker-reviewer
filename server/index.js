@@ -12,6 +12,127 @@ const { analyzeSession } = require("./analyzer");
 
 // ── Hand context builder (for chat endpoint) ──────────────────────────────────
 
+// Convert raw card notation (e.g. "Td", "Ks") to human-readable form ("T♦", "K♠")
+function formatCard(c) {
+  if (!c) return c;
+  const SUITS = { h: "♥", d: "♦", c: "♣", s: "♠" };
+  const suit = c.slice(-1).toLowerCase();
+  const rank = c.slice(0, -1).toUpperCase();
+  return rank + (SUITS[suit] || suit);
+}
+
+function formatCards(cards) {
+  if (!cards?.length) return "unknown";
+  return cards.map(formatCard).join(" ");
+}
+
+function suitednessNote(cards) {
+  if (!cards || cards.length < 2) return "";
+  const suits = cards.map(c => c.slice(-1).toLowerCase());
+  if (suits.every(s => s === suits[0])) return " (suited)";
+  if (new Set(suits).size === suits.length) return " (rainbow)";
+  return "";
+}
+
+// Describe the hero's hand strength vs the current board (simple, readable)
+function describeHeroHolding(heroCards, board) {
+  if (!heroCards?.length || !board?.length) return null;
+
+  const RANKS = "23456789TJQKA";
+  const rankOf = c => RANKS.indexOf(c.slice(0, -1).toUpperCase());
+  const suitOf = c => c.slice(-1).toLowerCase();
+
+  const heroRanks = heroCards.map(rankOf);
+  const heroSuits = heroCards.map(suitOf);
+  const boardRanks = board.map(rankOf);
+  const allCards   = [...heroCards, ...board];
+  const allRanks   = allCards.map(rankOf);
+  const allSuits   = allCards.map(suitOf);
+
+  // ── Flush / flush draw ────────────────────────────────────────────────────
+  const suitCounts = {};
+  for (const s of allSuits) suitCounts[s] = (suitCounts[s] ?? 0) + 1;
+  const heroFlushSuit = heroSuits[0] === heroSuits[1] ? heroSuits[0] : null;
+  const madeFlushed   = heroFlushSuit && (suitCounts[heroFlushSuit] ?? 0) >= 5;
+  const flushDraw     = heroFlushSuit && (suitCounts[heroFlushSuit] ?? 0) === 4;
+
+  // ── Straight check ────────────────────────────────────────────────────────
+  const uniqueRanks = [...new Set(allRanks)].sort((a, b) => a - b);
+  // Also handle A-low straight (A=12 treated as -1)
+  if (uniqueRanks.includes(12)) uniqueRanks.unshift(-1);
+
+  let madeStraight = false;
+  let heroContributesStraight = false;
+  for (let i = 0; i <= uniqueRanks.length - 5; i++) {
+    const window = uniqueRanks.slice(i, i + 5);
+    if (window[4] - window[0] === 4 && new Set(window).size === 5) {
+      // Check hero cards are part of this straight
+      if (heroRanks.some(r => window.includes(r)) ||
+          (window.includes(-1) && heroRanks.includes(12))) {
+        madeStraight = true;
+        heroContributesStraight = true;
+      } else {
+        madeStraight = true; // board straight, hero doesn't need to contribute
+      }
+      break;
+    }
+  }
+
+  // ── Straight draw (open-ended or gutshot) ─────────────────────────────────
+  let straightDraw = false;
+  if (!madeStraight) {
+    for (let top = 3; top <= 12; top++) {
+      const needed = [top - 4, top - 3, top - 2, top - 1, top];
+      const have   = needed.filter(r => allRanks.includes(r) || (r === -1 && allRanks.includes(12)));
+      const heroContrib = needed.filter(r => heroRanks.includes(r)).length;
+      if (have.length === 4 && heroContrib >= 1) { straightDraw = true; break; }
+    }
+  }
+
+  // ── Pair / board interaction ──────────────────────────────────────────────
+  const boardRankCounts = {};
+  for (const r of boardRanks) boardRankCounts[r] = (boardRankCounts[r] ?? 0) + 1;
+
+  const hits = heroRanks.filter(r => boardRankCounts[r] > 0);
+  const sortedBoard = [...boardRanks].sort((a, b) => b - a);
+
+  // Trips: hero pairs a board rank that appears once, or hero has a pair that hits board
+  const isTrips = hits.some(r => boardRankCounts[r] >= 2) ||
+                  (heroRanks[0] === heroRanks[1] && boardRankCounts[heroRanks[0]] >= 1);
+
+  // Quads / full house (simplified)
+  const allRankCounts = {};
+  for (const r of allRanks) allRankCounts[r] = (allRankCounts[r] ?? 0) + 1;
+  const hasQuads    = Object.values(allRankCounts).some(c => c >= 4);
+  const hasFullHouse = !hasQuads && Object.values(allRankCounts).filter(c => c >= 3).length >= 1 &&
+                       Object.values(allRankCounts).filter(c => c >= 2).length >= 2;
+
+  // ── Compose result ────────────────────────────────────────────────────────
+  let strength;
+  if (madeFlushed && madeStraight && heroContributesStraight) strength = "straight flush";
+  else if (hasQuads)     strength = "four of a kind";
+  else if (hasFullHouse) strength = "full house";
+  else if (madeFlushed)  strength = "flush";
+  else if (madeStraight && heroContributesStraight) strength = "straight";
+  else if (isTrips)      strength = "trips";
+  else if (hits.length >= 2) strength = "two pair";
+  else if (hits.length === 1) {
+    const pairRank = hits[0];
+    if (pairRank === sortedBoard[0])                       strength = "top pair";
+    else if (pairRank === sortedBoard[sortedBoard.length - 1]) strength = "bottom pair";
+    else                                                    strength = "middle pair";
+  } else if (heroRanks[0] === heroRanks[1]) {
+    strength = heroRanks[0] > sortedBoard[0] ? "overpair" : "pocket pair (no pair with board)";
+  } else {
+    strength = "no pair (overcards)";
+  }
+
+  const draws = [];
+  if (flushDraw)   draws.push("flush draw");
+  if (straightDraw && !madeStraight) draws.push("straight draw");
+  return draws.length ? `${strength} + ${draws.join(" + ")}` : strength;
+}
+
 function buildHandContext(hand, heroName, bigBlind) {
   const STREETS = ["preflop", "flop", "turn", "river"];
   const boardAt = {
@@ -20,30 +141,57 @@ function buildHandContext(hand, heroName, bigBlind) {
     river: (hand.board ?? []).slice(0, 5),
   };
 
+  const heroCards = hand.yourHand ?? [];
+  const heroSuit  = heroCards.length === 2
+    ? (heroCards[0].slice(-1) === heroCards[1].slice(-1) ? "suited" : "offsuit")
+    : "";
+
+  // Track running pot so Claude gets accurate per-street pot sizes
+  const INVESTING = new Set(["small_blind","big_blind","call","bet","raise","call_allin","bet_allin","raise_allin"]);
+  let runningPot = 0;
+  const streetBetsAtStart = {}; // track per-player contributions per street to avoid double-counting calls
+
   const actionLines = STREETS.map(street => {
     const actions = hand.streets?.[street] ?? [];
     if (actions.length === 0) return null;
 
-    const boardStr = street !== "preflop" && boardAt[street]?.length
-      ? ` [${boardAt[street].join(" ")}]`
+    const potAtStreetStart = runningPot;
+    const streetBets = {};
+
+    // Calculate pot contributions for this street
+    for (const a of actions) {
+      if (INVESTING.has(a.action) && a.amount) {
+        const prev = streetBets[a.player] ?? 0;
+        const additional = Math.max(0, a.amount - prev);
+        runningPot += additional;
+        streetBets[a.player] = a.amount;
+      }
+    }
+
+    const board = boardAt[street] ?? [];
+    const boardStr = street !== "preflop" && board.length
+      ? ` [${formatCards(board)}${suitednessNote(board)}]`
       : "";
+
+    const heroHolding = street !== "preflop" && board.length
+      ? describeHeroHolding(heroCards, board)
+      : null;
 
     const actStr = actions.map(a => {
       const who = a.player === heroName ? "Hero" : a.player.split(/[\s@]/)[0].slice(0, 10);
       let s = `${who} ${a.action}`;
       if (a.amount) s += ` ${a.amount}`;
-      if (a.sizingRatio != null && a.sizingRatio > 0 && street !== "preflop") {
-        s += ` (${Math.round(a.sizingRatio * 100)}% pot)`;
-      }
       return s;
     }).join(", ");
 
-    return `  ${street.charAt(0).toUpperCase() + street.slice(1)}${boardStr}: ${actStr}`;
+    const potLabel = street === "preflop" ? "" : ` (pot: ${potAtStreetStart.toFixed(2)})`;
+    const holdingLabel = heroHolding ? ` {Hero: ${heroHolding}}` : "";
+    return `  ${street.charAt(0).toUpperCase() + street.slice(1)}${boardStr}${potLabel}${holdingLabel}: ${actStr}`;
   }).filter(Boolean);
 
   return [
-    `Hand #${hand.handNumber} | ${hand.players?.length ?? "?"} players | Pot: ${hand.potSize} | BB: ${bigBlind}`,
-    `Hero cards: ${hand.yourHand?.length ? hand.yourHand.join(" ") : "unknown"}`,
+    `Hand #${hand.handNumber} | ${hand.players?.length ?? "?"} players | BB: ${bigBlind}`,
+    `Hero hole cards: ${formatCards(heroCards)}${heroSuit ? ` (${heroSuit})` : ""}`,
     `Hero stack: ${hand.heroStack ?? "unknown"}`,
     "",
     actionLines.join("\n"),
@@ -187,7 +335,7 @@ app.get("/api/session/:sessionId/hands", (req, res) => {
 /**
  * POST /api/chat
  * Body: { sessionId, heroName, handNumber, messages }
- * Streams a Claude coaching response about a specific hand via SSE.
+ * Returns a Claude coaching reply as plain JSON.
  */
 app.post("/api/chat", async (req, res) => {
   try {
@@ -213,22 +361,14 @@ app.post("/api/chat", async (req, res) => {
     }
 
     const handContext = buildHandContext(hand, heroName, session.bigBlind);
-
-    // SSE headers
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-    res.flushHeaders();
-
-    let closed = false;
-    req.on("close", () => { closed = true; });
-
     const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-    const stream = anthropic.messages.stream({
-      model: "claude-opus-4-5",
+    const response = await anthropic.messages.create({
+      model: "claude-haiku-4-5-20251001",
       max_tokens: 1024,
-      system: `You are an expert poker coach reviewing a player's session hand by hand. The player is "${heroName}" with a big blind of ${session.bigBlind}. Be concise (2–4 sentences unless more detail is requested), specific to the actual hand data shown, and educational. Reference bet sizes, board texture, and position when relevant. Engage directly with the player's reasoning — explain whether it was correct and exactly why.`,
+      system: `You are an expert poker coach reviewing a player's session hand by hand. The player is "${heroName}" with a big blind of ${session.bigBlind}. Be concise (2–4 sentences unless more detail is requested), specific to the actual hand data shown, and educational. Reference bet sizes, board texture, and position when relevant.
+
+CRITICAL: Each street line includes a {Hero: X} tag that states the hero's exact hand strength at that point (e.g. {Hero: straight}, {Hero: top pair}, {Hero: flush draw}). These are computed facts — treat them as ground truth. NEVER contradict or override them with your own hand-reading. If {Hero: straight} appears on the flop, the hero flopped a straight; do not call it a draw.`,
       messages: [
         { role: "user",      content: `Hand context:\n${handContext}` },
         { role: "assistant", content: "I've reviewed the hand. What would you like to discuss?" },
@@ -236,25 +376,10 @@ app.post("/api/chat", async (req, res) => {
       ],
     });
 
-    for await (const chunk of stream) {
-      if (closed) break;
-      if (chunk.type === "content_block_delta" && chunk.delta.type === "text_delta") {
-        res.write(`data: ${JSON.stringify({ text: chunk.delta.text })}\n\n`);
-      }
-    }
-
-    if (!closed) {
-      res.write("data: [DONE]\n\n");
-      res.end();
-    }
+    res.json({ reply: response.content[0].text });
   } catch (err) {
     console.error("Chat error:", err);
-    if (!res.headersSent) {
-      res.status(500).json({ error: err.message });
-    } else {
-      res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
-      res.end();
-    }
+    res.status(500).json({ error: err.message });
   }
 });
 

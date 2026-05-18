@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { Send, Loader, Bot } from "lucide-react";
-import { streamHandChat } from "../api.js";
+import { chatAboutHand } from "../api.js";
 
 const SUGGESTED = [
   "What should I have done differently?",
@@ -15,7 +15,6 @@ export default function HandChat({ sessionId, heroName, hand, fillHeight }) {
   const [histories, setHistories] = useState({});
   const [streaming, setStreaming] = useState(false);
   const [input, setInput]         = useState("");
-  const abortRef  = useRef(null);
   const bottomRef = useRef(null);
   const inputRef  = useRef(null);
 
@@ -25,11 +24,8 @@ export default function HandChat({ sessionId, heroName, hand, fillHeight }) {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, streaming]);
 
-  // Reset input when hand changes; cancel any in-flight stream
+  // Reset input when hand changes
   useEffect(() => {
-    abortRef.current?.();
-    abortRef.current = null;
-    setStreaming(false);
     setInput("");
     setTimeout(() => inputRef.current?.focus(), 60);
   }, [handKey]);
@@ -39,46 +35,26 @@ export default function HandChat({ sessionId, heroName, hand, fillHeight }) {
     if (!trimmed || streaming || handKey == null) return;
 
     const userMsg = { role: "user", content: trimmed };
+    const prevHistory = histories[handKey] ?? [];
     setHistories(h => ({ ...h, [handKey]: [...(h[handKey] ?? []), userMsg] }));
     setInput("");
     setStreaming(true);
 
-    // Placeholder assistant message we'll stream into
-    setHistories(h => ({
-      ...h,
-      [handKey]: [...(h[handKey] ?? []), { role: "assistant", content: "" }],
-    }));
-
-    let cancelled = false;
-    abortRef.current = () => { cancelled = true; };
-
     try {
-      const history = (histories[handKey] ?? []).slice(-10);
-      const gen = streamHandChat(sessionId, heroName, handKey, [...history, userMsg]);
-
-      for await (const chunk of gen) {
-        if (cancelled) break;
-        setHistories(h => {
-          const prev = h[handKey] ?? [];
-          const updated = [...prev];
-          const last = updated[updated.length - 1];
-          if (last?.role === "assistant") {
-            updated[updated.length - 1] = { ...last, content: last.content + chunk };
-          }
-          return { ...h, [handKey]: updated };
-        });
-      }
+      const reply = await chatAboutHand(
+        sessionId, heroName, handKey,
+        [...prevHistory.slice(-10), userMsg]
+      );
+      setHistories(h => ({
+        ...h,
+        [handKey]: [...(h[handKey] ?? []), { role: "assistant", content: reply }],
+      }));
     } catch (err) {
-      if (!cancelled) {
-        setHistories(h => {
-          const prev = h[handKey] ?? [];
-          const updated = [...prev];
-          updated[updated.length - 1] = { role: "assistant", content: `Error: ${err.message}` };
-          return { ...h, [handKey]: updated };
-        });
-      }
+      setHistories(h => ({
+        ...h,
+        [handKey]: [...(h[handKey] ?? []), { role: "assistant", content: `Error: ${err.message}` }],
+      }));
     } finally {
-      abortRef.current = null;
       setStreaming(false);
     }
   }, [input, streaming, handKey, sessionId, heroName, histories]);
@@ -135,10 +111,7 @@ export default function HandChat({ sessionId, heroName, hand, fillHeight }) {
         {messages.map((m, i) => (
           <div key={i} style={m.role === "user" ? st.userRow : st.assistantRow}>
             <div style={m.role === "user" ? st.userBubble : st.assistantBubble}>
-              {m.content || (streaming && i === messages.length - 1
-                ? <span style={st.cursor}>▍</span>
-                : null
-              )}
+              {m.content}
             </div>
           </div>
         ))}
